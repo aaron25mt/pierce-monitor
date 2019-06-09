@@ -1,0 +1,21 @@
+{
+  "name": "pierce-monitor",
+  "version": "1.0.0",
+  "description": "monitors the pierce (in san jose, ca) webpage to monitor floor plan changes",
+  "main": "scrape.js",
+  "scripts": {
+    "dev": "nodemon scrape.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Aaron Thomas",
+  "license": "ISC",
+  "dependencies": {
+    "aws-sdk": "^2.471.0",
+    "axios": "^0.19.0",
+    "cheerio": "^1.0.0-rc.3",
+    "json-diff": "^0.5.4"
+  },
+  "devDependencies": {
+    "nodemon": "^1.19.1"
+  }
+}
