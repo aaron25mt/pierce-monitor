@@ -5,8 +5,6 @@ exports.handler = (event, context, callback) => {
   const jsonDiff = require("json-diff")
   const AWS = require("aws-sdk")
 
-  const oldFloorPlans = require("./floor-plans.json")
-
   const SECONDS = 1000
 
   // DEV STUFF
@@ -17,20 +15,48 @@ exports.handler = (event, context, callback) => {
     if (config.DEBUG_MODE) console.log("[DEBUG] " + text)
   }
 
-  const log = async (text, file) => {
+  const formatMoney = price => {
+    return Number(price).toFixed(0).replace(/\d(?=(\d{3})+\.)/g, '$&,')
+  }
+
+  const getOldFloorPlans = async () => {
+    debug("Retrieving old floor plans..")
+
+    const s3 = new AWS.S3()
+    const params = {
+      Bucket: "pierce-monitor",
+      Key: "floor-plans.json"
+    }
+
     try {
-      const response = await fs.writeFile("./" + file, text, () => {})
-      debug(file + " updated!")
-      return response
+      const response = await s3.getObject(params).promise()
+      debug("Successfully retrieved old floor plans from S3..")
+      return JSON.parse(response.Body.toString("utf-8"))
     } catch (error) {
-      debug("Error saving log file.")
+      debug("Unable to retrieve old floor plans from S3..")
       debug(error)
-      throw error
+      return []
     }
   }
 
-  const formatMoney = price => {
-    return Number(price).toFixed(0).replace(/\d(?=(\d{3})+\.)/g, '$&,')
+  const publishUpdatedFloorPlans = async text => {
+    debug("Uploading updated floor plans to S3...")
+
+    const s3 = new AWS.S3()
+    const params = {
+      Bucket: "pierce-monitor",
+      Key: "floor-plans.json",
+      Body: text
+    }
+
+    try {
+      const response = await s3.putObject(params).promise()
+      debug("Successfully uploaded updated floor plans to S3!")
+    } catch (error) {
+      debug("Error uploading updated floor plans to S3..")
+      debug(error)
+      throw error
+    }
   }
 
   const formatFloorPlansForSMS = floorPlans => {
@@ -124,11 +150,6 @@ exports.handler = (event, context, callback) => {
   const publishToSNS = async message => {
     debug("Publishing message to SNS..")
 
-    AWS.config.update({
-      accessKeyId: config.AWS_ACCESS_KEY_ID,
-      secretAccessKey: config.AWS_SECRET_ACCESS_KEY,
-      region: config.AWS_REGION
-    })
     const sns = new AWS.SNS()
     const params = {
       Message: message,
@@ -136,15 +157,14 @@ exports.handler = (event, context, callback) => {
       TopicArn: config.SNS_TOPIC
     }
 
-    await sns.publish(params, async (error, data) => {
-      if (error) {
-        debug("Error publishing to SNS topic..")
-        debug(error)
-        throw error
-      }
-
+    try {
+      await sns.publish(params).promise()
       debug("Message successfully posted to SNS topic!")
-    })
+    } catch (error) {
+      debug("Error publishing to SNS topic..")
+      debug(error)
+      throw error
+    }
   }
 
   // A function that keeps trying, "toTry" until it returns true or has
@@ -171,13 +191,14 @@ exports.handler = (event, context, callback) => {
     try {
       const html = await grabHTML()
       const floorPlans = parseFloorPlans(html)
+      const oldFloorPlans = await getOldFloorPlans()
       const newChanges = jsonDiff.diff(oldFloorPlans, floorPlans)
 
       if (newChanges) {
         debug("New changes to availability!")
         const formattedJSON = JSON.stringify(floorPlans, null, 4)
-        const logged = await log(formattedJSON, "floor-plans.json")
-        const published = await publishToSNS(formatFloorPlansForSMS(floorPlans))
+        await publishUpdatedFloorPlans(formattedJSON)
+        await publishToSNS(formatFloorPlansForSMS(floorPlans))
       } else {
         debug("No new changes to availability :(")
       }
@@ -191,6 +212,12 @@ exports.handler = (event, context, callback) => {
 
   const main = async () => {
     debug("Starting scraper...")
+
+    AWS.config.update({
+      accessKeyId: config.AWS_ACCESS_KEY_ID,
+      secretAccessKey: config.AWS_SECRET_ACCESS_KEY,
+      region: config.AWS_REGION
+    })
 
     exponentialBackoff(scrape, 5, 30 * SECONDS, success => {
       if (!success) debug("Failure scraping site.")
